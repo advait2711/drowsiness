@@ -1,3 +1,5 @@
+import mysql.connector
+import datetime
 import cv2
 import numpy as np
 import dlib
@@ -5,6 +7,28 @@ from imutils import face_utils
 import tkinter as tk
 from tkinter import ttk
 from PIL import Image, ImageTk
+import pygame
+import base64
+import datetime
+
+
+conn = mysql.connector.connect(
+    host='localhost',
+    user='your username',
+    password='=your password',
+    database='drowsiness_db'
+)
+cursor = conn.cursor()
+
+
+cursor.execute('''CREATE TABLE IF NOT EXISTS drowsiness (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    date DATE,
+                    timestamp TIME,
+                    status VARCHAR(50),
+                    frame MEDIUMBLOB
+                )''')
+conn.commit()
 
 cap = cv2.VideoCapture(0)
 detector = dlib.get_frontal_face_detector()
@@ -15,6 +39,8 @@ drowsy = 0
 active = 0
 status = ""
 color = (0, 0, 0)
+
+alarm_playing = False
 
 def compute(ptA, ptB):
     dist = np.linalg.norm(ptA - ptB)
@@ -31,6 +57,40 @@ def blinked(a, b, c, d, e, f):
         return 1
     else:
         return 0
+
+def play_alarm():
+    global alarm_playing
+    if not alarm_playing:
+        pygame.mixer.music.load("mixkit-alert-alarm-1005.wav")
+        pygame.mixer.music.play(-1)  
+        alarm_playing = True
+
+def stop_alarm():
+    global alarm_playing
+    if alarm_playing:
+        pygame.mixer.music.stop()
+        alarm_playing = False
+
+
+def store_data(status, frame):
+    date = datetime.date.today().strftime('%Y-%m-%d')
+    timestamp = datetime.datetime.now().strftime('%H:%M:%S.%f')[:-3]
+    
+    
+    _, encoded_frame = cv2.imencode('.png', frame)
+    
+    print(f"Encoded frame type: {type(encoded_frame)}")  
+    print(f"Encoded frame size: {len(encoded_frame)}")  
+    
+    try:
+        cursor.execute("INSERT INTO drowsiness (date, timestamp, status, frame) VALUES (%s, %s, %s, %s)",
+                       (date, timestamp, status, encoded_frame.tobytes()))
+        conn.commit()
+        print("Data stored successfully!")
+    except mysql.connector.Error as err:
+        print(f"Error: {err}")
+
+
 
 def update_frame():
     global sleep, drowsy, active
@@ -66,6 +126,8 @@ def update_frame():
             if sleep > 6:
                 status_var.set("SLEEPING !!!")
                 status_label.config(foreground="red")
+                play_alarm()
+                store_data("SLEEPING", face_frame)
 
         elif left_blink == 1 or right_blink == 1:
             sleep = 0
@@ -74,6 +136,8 @@ def update_frame():
             if drowsy > 6:
                 status_var.set("Drowsy !")
                 status_label.config(foreground="blue")
+                play_alarm()
+                store_data("Drowsy", face_frame)
 
         else:
             drowsy = 0
@@ -82,6 +146,8 @@ def update_frame():
             if active > 6:
                 status_var.set("Active")
                 status_label.config(foreground="green")
+                stop_alarm()
+                
 
         update_image(face_frame)
 
@@ -104,10 +170,13 @@ status_label.pack(pady=10)
 panel = ttk.Label(root)
 panel.pack()
 
+
+pygame.mixer.init()
+
 update_frame()
 
 root.protocol("WM_DELETE_WINDOW", lambda: root.destroy())
 root.mainloop()
 
-
 cap.release()
+conn.close()
